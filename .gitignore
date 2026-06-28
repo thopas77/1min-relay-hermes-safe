@@ -1,1 +1,11 @@
 .DS_Store
+# Local Python/runtime artifacts
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets / local env
+.env
+*.env
+secrets/
