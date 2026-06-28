@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import re
 import socket
 import time
 import uuid
@@ -373,6 +374,12 @@ UNSAFE_REASONING_MARKERS = (
 )
 
 
+HERMES_LINK_CONTEXT_MARKER_RE = re.compile(
+    r"here is some information from the links you provided",
+    re.IGNORECASE,
+)
+
+
 def extract_assistant_text(resp_json) -> str:
     if isinstance(resp_json, dict):
         try:
@@ -389,10 +396,23 @@ def extract_assistant_text(resp_json) -> str:
     raise ValueError("missing assistant content")
 
 
+def sanitize_hermes_link_context_leak(text: str) -> str:
+    match = HERMES_LINK_CONTEXT_MARKER_RE.search(text)
+    if not match:
+        return text
+
+    prefix = text[: match.start()].rstrip()
+    if not prefix:
+        raise ValueError("unsafe Hermes link context leak")
+    return prefix
+
+
 def sanitize_assistant_text(text: str) -> str:
     cleaned = str(text or "").strip()
     if not SANITIZE_ASSISTANT_OUTPUT:
         return cleaned
+    if HERMES_SAFE_MODE:
+        cleaned = sanitize_hermes_link_context_leak(cleaned)
     if BLOCK_REASONING_LEAKS:
         lowered = cleaned.lower()
         if any(marker in lowered for marker in UNSAFE_REASONING_MARKERS):

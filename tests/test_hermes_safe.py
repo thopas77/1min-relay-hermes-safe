@@ -115,6 +115,81 @@ class HermesSafeTests(unittest.TestCase):
         self.assertIn("Safe final", body)
         self.assertTrue(body.rstrip().endswith("data: [DONE]"))
 
+    def test_link_context_clean_output_unchanged(self):
+        main = load_main()
+        client = main.app.test_client()
+        fake = FakeResponse(payload=ai_payload("Clean assistant output"))
+        with patch.object(main.requests, "post", return_value=fake):
+            resp = client.post("/v1/chat/completions", json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["choices"][0]["message"]["content"], "Clean assistant output")
+
+    def test_link_context_suffix_with_newline_removed(self):
+        main = load_main()
+        client = main.app.test_client()
+        leaked = "Final answer\nHere is some information from the links you provided:"
+        fake = FakeResponse(payload=ai_payload(leaked))
+        with patch.object(main.requests, "post", return_value=fake):
+            resp = client.post("/v1/chat/completions", json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["choices"][0]["message"]["content"], "Final answer")
+
+    def test_link_context_suffix_without_newline_removed(self):
+        main = load_main()
+        client = main.app.test_client()
+        leaked = "relayclean_post_memory_works_1Here is some information from the links you provided:"
+        fake = FakeResponse(payload=ai_payload(leaked))
+        with patch.object(main.requests, "post", return_value=fake):
+            resp = client.post("/v1/chat/completions", json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]})
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json()["choices"][0]["message"]["content"], "relayclean_post_memory_works_1")
+
+    def test_link_context_suffix_with_url_removed(self):
+        main = load_main()
+        client = main.app.test_client()
+        leaked = "Final answer\nHere is some information from the links you provided: Link: https://hermes-agent.nousresearch.com/docs"
+        fake = FakeResponse(payload=ai_payload(leaked))
+        with patch.object(main.requests, "post", return_value=fake):
+            resp = client.post("/v1/chat/completions", json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]})
+
+        self.assertEqual(resp.status_code, 200)
+        content = resp.get_json()["choices"][0]["message"]["content"]
+        self.assertEqual(content, "Final answer")
+        self.assertNotIn("hermes-agent.nousresearch.com", content)
+
+    def test_link_context_suffix_only_is_blocked(self):
+        main = load_main()
+        client = main.app.test_client()
+        leaked = "Here is some information from the links you provided: Link: https://hermes-agent.nousresearch.com/docs"
+        fake = FakeResponse(payload=ai_payload(leaked))
+        with patch.object(main.requests, "post", return_value=fake):
+            resp = client.post("/v1/chat/completions", json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]})
+
+        body = resp.get_json()
+        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(body["error"]["type"], "upstream_output_safety_error")
+        self.assertEqual(body["error"]["code"], "unsafe_reasoning_leak")
+        self.assertNotIn("hermes-agent.nousresearch.com", str(body))
+
+    def test_synthetic_sse_uses_sanitized_link_context_text(self):
+        main = load_main()
+        client = main.app.test_client()
+        leaked = "Stream-safe answerHere is some information from the links you provided: Link: https://hermes-agent.nousresearch.com/docs"
+        fake = FakeResponse(payload=ai_payload(leaked))
+        with patch.object(main.requests, "post", return_value=fake):
+            resp = client.post("/v1/chat/completions", json={"stream": True, "model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]})
+
+        body = resp.get_data(as_text=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/event-stream", resp.content_type)
+        self.assertIn("Stream-safe answer", body)
+        self.assertNotIn("Here is some information from the links you provided", body)
+        self.assertNotIn("hermes-agent.nousresearch.com", body)
+        self.assertTrue(body.rstrip().endswith("data: [DONE]"))
+
     def test_upstream_payload_forces_safe_settings_and_omits_conversation_id(self):
         main = load_main()
         client = main.app.test_client()
